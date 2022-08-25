@@ -1,16 +1,19 @@
 #include <Arduino.h>
 #include <WiFi.h>
+#include "iarduino_RTC.h"
 
 #include "TimersDispatcher.h"
 #include "database.h"
 #include "config.h"
+
+iarduino_RTC watch(RTC_DS1302, 23, 22, 19); // RST CLK DT
 
 TimersDispatcher<unsigned long> async(millis, 4294967); //проверить так ли это
 
 bool ready;
 bool inited;
 TaskId* servicesInitialization;
-TaskId* dataSending;
+TaskId* request;
 
 bool moving;
 byte state = 0; // 0 - не запущен 1 - опускается 2 - внизу 3 - поднимается 4 - вверху
@@ -47,7 +50,7 @@ void completeProcess();
 void stopProcess();
 void abortProcess(const char* reason);
 
-void getData();
+bool getData();
 bool sendAllData();
 void updateWifiTime();
 bool sendLowered();
@@ -63,6 +66,7 @@ void firebaseStreamTimeout(bool timeout);
 
 void setup() {
   Serial.begin(115200);
+  watch.begin();
   // pinMode(21, OUTPUT);
   initWifi();
   async.setInterval(everySecondLoop, 1000);
@@ -88,7 +92,12 @@ bool everySecondLoop() {
         heartbeat();
         send("current/temp", published.temp);
         updateWifiTime();
+        if (published.currentTime != watch.gettimeUnix() && published.currentTime > 0) {
+          watch.settimeUnix(published.currentTime);
+        }
       }
+    } else {
+      published.currentTime = watch.gettimeUnix();
     }
     processLoop[state]();
   } else {
@@ -106,6 +115,7 @@ void state0() { // не запущен
     state = 1;
     //функция для опускания
     published.completedCycles = 0;
+    published.completed = false;
     published.start = published.currentTime; // возможно отправлять для точности
     Serial.print(F("Процесс запущен sec: "));
     Serial.println(published.currentTime);
@@ -127,7 +137,9 @@ void state1() { // опускается
     published.lowered = true;
     Serial.print(F("Опустился: "));
     Serial.println(millis());
-    send("current/lowered", true); // отправлять только если подключено
+    if (WiFi.status() == WL_CONNECTED) {
+      send("current/lowered", true);
+    }
   }
 }
 
@@ -147,7 +159,9 @@ void state3() { // поднимается
     published.lowered = false;
     Serial.print(F("Поднялся: "));
     Serial.println(millis());
-    send("current/lowered", false); // отправлять только если подключено
+    if (WiFi.status() == WL_CONNECTED) {
+      send("current/lowered", false);
+    }
   }
 }
 
@@ -159,7 +173,9 @@ void state4() { // вверху
     Serial.print(published.currentTime);
     Serial.print(F(" millis: "));
     Serial.println(millis());
-    send("current/completedCycles", published.completedCycles); // отправлять только если подключено
+    if ((WiFi.status() == WL_CONNECTED)) {
+      send("current/completedCycles", published.completedCycles);
+    }
     if (published.completedCycles == fetched.cycles) {
       state = 0;
       completeProcess();
@@ -204,38 +220,37 @@ void abortProcess(const char* reason) {
 
 /////////////////////////// database
 
-void getData() {
-  if (Firebase.RTDB.getInt(&fbdo, F("/current/top"))) {
-    fetched.top = fbdo.to<int>();
-  }
-  if (Firebase.RTDB.getInt(&fbdo, F("/current/down"))) {
-    fetched.down = fbdo.to<int>();
-  }
-  if (Firebase.RTDB.getInt(&fbdo, F("/current/cycles"))) {
-    fetched.cycles = fbdo.to<int>();
-  }
+bool getData() {
+  if (!Firebase.RTDB.getInt(&fbdo, F("/current/top"))) return false;
+  fetched.top = fbdo.to<int>();
+  if (!Firebase.RTDB.getInt(&fbdo, F("/current/down"))) return false;
+  fetched.down = fbdo.to<int>();
+  if (!Firebase.RTDB.getInt(&fbdo, F("/current/cycles"))) return false;
+  fetched.cycles = fbdo.to<int>();
   fetched.running = true;
+  request = nullptr;
+  return true;
 }
 
 bool sendAllData() {
   if (WiFi.status() == WL_CONNECTED) {
     if (Firebase.ready()) {
-      send("current/running", false);
-      send("current/completed", true);
-      send("current/lowered", false);
-      // возможно отправлять start, но будет актуально только с блютузом
-      send("current/finish", published.finish);
-      send("current/currentTime", published.currentTime);
-      send("current/temp", published.temp);
-      send("current/completedCycles", published.completedCycles);
-      dataSending = nullptr;
-      return true;
+      if (send("current/running", false) &&
+          send("current/completed", true) &&
+          send("current/lowered", false) &&
+          send("current/finish", published.finish) &&
+          send("current/currentTime", published.currentTime) &&
+          send("current/temp", published.temp) &&
+          send("current/completedCycles", published.completedCycles)) {
+        request = nullptr;
+        return true;
+      } // возможно отправлять start, но будет актуально только с блютузом
     }
   }
   return false;
 }
 
-void updateWifiTime() {
+void updateWifiTime() { // !!! при отключении и включении wifi иногда начинает постоянно выдавать 0
   Firebase.RTDB.setTimestamp(&secondary, F("/current/currentTime"));
   published.currentTime = secondary.to<int>();
 }
@@ -256,7 +271,7 @@ void onWifiConnected(WiFiEvent_t event, WiFiEventInfo_t info) {
   if (!inited) {
     servicesInitialization = async.setInterval(initServices, 500);
   } else if (published.completed) {
-    dataSending = async.setInterval(sendAllData, 500);
+    request = async.setInterval(sendAllData, 500);
   }
   Serial.println(F("Подключено к wifi"));
 }
@@ -266,9 +281,9 @@ void onWifiDisconnected(WiFiEvent_t event, WiFiEventInfo_t info) {
     async.clearInterval(servicesInitialization);
     servicesInitialization = nullptr;
   }
-  if (dataSending != nullptr) {
-    async.clearInterval(dataSending);
-    dataSending = nullptr;
+  if (request != nullptr) {
+    async.clearInterval(request);
+    request = nullptr;
   }
   Serial.println(F("Соединение с wifi разорвано, переподключение.."));
   // WiFi.begin(config.ssid, config.wifiPassword);
@@ -309,7 +324,7 @@ void firebaseStream(FirebaseStream data) {
   Serial.println(running);
   if (running) {
     if (ready) {
-      getData();
+      request = async.setInterval(getData, 500);
     } else {
       abortProcess("Прерван из-за отключения питания");
     }

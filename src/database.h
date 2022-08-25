@@ -10,49 +10,59 @@ FirebaseData fbdo;
 FirebaseData secondary;
 FirebaseData stream;
 
-void send(const char* path, bool value) { // и разобраться c f макро
-  if (!Firebase.RTDB.setBool(&fbdo, F(path), value)) {
+bool send(const char* path, bool value) { // и разобраться c f макро
+  bool ok = Firebase.RTDB.setBool(&fbdo, F(path), value);
+  if (!ok) {
     Serial.print("Ошибка при отправке в ");
     Serial.print(path);
     Serial.print(" ");
     Serial.println(fbdo.errorReason());
   }
+  return ok;
 }
 
-void send(const char* path, const char* value) {
-  if (!Firebase.RTDB.setString(&fbdo, F(path), value)) {
+bool send(const char* path, const char* value) {
+  bool ok = Firebase.RTDB.setString(&fbdo, F(path), value);
+  if (!ok) {
     Serial.print("Ошибка при отправке в ");
     Serial.print(path);
     Serial.print(" ");
     Serial.println(fbdo.errorReason());
   }
+  return ok;
 }
 
-void send(const char* path, unsigned int value) {
-  if (!Firebase.RTDB.setInt(&fbdo, F(path), value)) {
+bool send(const char* path, unsigned int value) {
+  bool ok = Firebase.RTDB.setInt(&fbdo, F(path), value);
+  if (!ok) {
     Serial.print("Ошибка при отправке в ");
     Serial.print(path);
     Serial.print(" ");
     Serial.println(fbdo.errorReason());
   }
+  return ok;
 }
 
-void send(const char* path, unsigned long value) {
-  if (!Firebase.RTDB.setInt(&fbdo, F(path), value)) {
+bool send(const char* path, unsigned long value) {
+  bool ok = Firebase.RTDB.setInt(&fbdo, F(path), value);
+  if (!ok) {
     Serial.print("Ошибка при отправке в ");
     Serial.print(path);
     Serial.print(" ");
     Serial.println(fbdo.errorReason());
   }
+  return ok;
 }
 
-void send(const char* path, float value) {
-  if (!Firebase.RTDB.setFloat(&fbdo, F(path), value)) {
+bool send(const char* path, float value) {
+  bool ok = Firebase.RTDB.setFloat(&fbdo, F(path), value);
+  if (!ok) {
     Serial.print("Ошибка при отправке в ");
     Serial.print(path);
     Serial.print(" ");
     Serial.println(fbdo.errorReason());
   }
+  return ok;
 }
 
 void heartbeat() {
